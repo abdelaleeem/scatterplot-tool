@@ -12,30 +12,22 @@ st.set_page_config(page_title="Scatterplot with Regression", layout="wide")
 # Helpers
 # ----------------------------
 def to_datetime_safe(series: pd.Series, *, dayfirst: bool, excel_serial: bool):
-    """Try to convert a column to datetime robustly."""
     s = series.copy()
-
-    # If it's already datetime, return it
     if pd.api.types.is_datetime64_any_dtype(s):
         return pd.to_datetime(s, errors="coerce")
 
-    # Excel serial numbers (days since 1899-12-30)
     if excel_serial and pd.api.types.is_numeric_dtype(s):
-        # treat obvious non-date values as NaN
         s = s.astype("float64")
         with pd.option_context("mode.use_inf_as_na", True):
-            s = s.where((s > 20000) & (s < 90000))  # approx years 1955..2146
+            s = s.where((s > 20000) & (s < 90000))
         base = pd.Timestamp("1899-12-30")
         return base + pd.to_timedelta(s, unit="D")
 
-    # Strings or mixed -> try parse
     return pd.to_datetime(s, errors="coerce", dayfirst=dayfirst)
 
 def finite_std(x: pd.Series):
     std = x.std()
-    if pd.isna(std) or std == 0:
-        return 1e-12
-    return std
+    return 1e-12 if pd.isna(std) or std == 0 else std
 
 # ----------------------------
 # File upload
@@ -47,13 +39,8 @@ if uploaded_file:
         if uploaded_file.name.lower().endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         else:
-            # Get available sheet names first
             xls = pd.ExcelFile(uploaded_file)
-            sheet_name = st.selectbox(
-                "Select a sheet from the Excel file",
-                xls.sheet_names,
-                key="sheet_select"
-            )
+            sheet_name = st.selectbox("Select a sheet from the Excel file", xls.sheet_names)
             df = pd.read_excel(xls, sheet_name=sheet_name)
     except Exception as e:
         st.error(f"Failed to read file: {e}")
@@ -61,73 +48,56 @@ if uploaded_file:
 
     st.write("### Data Preview")
     st.dataframe(df.head())
-    st.caption("Tip: If dates look wrong, use the toggles below to control parsing.")
 
     # ----------------------------
     # Date filter UI
     # ----------------------------
     st.subheader("Date Filter")
-    enable_date = st.checkbox("Enable date filter", value=False, key="enable_date")
+    enable_date = st.checkbox("Enable date filter", value=False)
 
     if enable_date:
-        date_col = st.selectbox(
-            "Select a column to treat as a date",
-            options=list(df.columns),
-            index=0,
-            key="date_col_select",
-        )
-
+        date_col = st.selectbox("Select a column to treat as a date", options=list(df.columns))
         col1, col2, col3 = st.columns(3)
         with col1:
-            dayfirst = st.checkbox("Day-first (DD/MM/YYYY)?", value=True, key="dayfirst")
+            dayfirst = st.checkbox("Day-first (DD/MM/YYYY)?", value=True)
         with col2:
-            excel_serial = st.checkbox("Excel serial numbers?", value=False, key="excel_serial")
+            excel_serial = st.checkbox("Excel serial numbers?", value=False)
         with col3:
-            drop_na_dates = st.checkbox("Drop rows with invalid dates", value=True, key="drop_na_dates")
+            drop_na_dates = st.checkbox("Drop rows with invalid dates", value=True)
 
-        # Convert
         parsed_dates = to_datetime_safe(df[date_col], dayfirst=dayfirst, excel_serial=excel_serial)
         if drop_na_dates:
             mask_valid = parsed_dates.notna()
             if not mask_valid.any():
-                st.error("No valid dates after parsing. Try toggling Day-first/Excel serial.")
+                st.error("No valid dates after parsing.")
                 st.stop()
             df = df.loc[mask_valid].copy()
             parsed_dates = parsed_dates.loc[mask_valid]
 
-        # Attach parsed date column (hidden helper)
         df["_dt_filter_col"] = parsed_dates
 
-        # Guard: if still empty
         if df.empty:
             st.error("All rows were dropped after date parsing.")
             st.stop()
 
-        # Build safe min/max as Python date
         min_ts = pd.to_datetime(df["_dt_filter_col"].min())
         max_ts = pd.to_datetime(df["_dt_filter_col"].max())
 
         if pd.isna(min_ts) or pd.isna(max_ts):
-            st.error("Could not determine min/max date. Check the parsing options.")
+            st.error("Could not determine min/max date.")
             st.stop()
 
         min_date = min_ts.date()
         max_date = max_ts.date()
         if min_date > max_date:
-            min_date, max_date = max_date, min_date  # swap if needed
+            min_date, max_date = max_date, min_date
 
-        date_range = st.date_input(
-            "Choose date range",
-            value=[min_date, max_date],
-            min_value=min_date,
-            max_value=max_date,
-            key="date_range",
-        )
+        date_range = st.date_input("Choose date range", value=[min_date, max_date],
+                                   min_value=min_date, max_value=max_date)
 
-        # Normalize selection
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             start_date = pd.to_datetime(date_range[0])
-            end_date = pd.to_datetime(date_range[1]) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)  # inclusive
+            end_date = pd.to_datetime(date_range[1]) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
             df = df[(df["_dt_filter_col"] >= start_date) & (df["_dt_filter_col"] <= end_date)].copy()
         else:
             st.warning("Please select a start and end date.")
@@ -145,21 +115,15 @@ if uploaded_file:
         st.error("No numeric columns found for X/Y.")
         st.stop()
 
-    x_col = st.selectbox("Select X-axis column (numeric)", numeric_cols, key="x_select")
-    y_col = st.selectbox("Select Y-axis column (numeric)", numeric_cols, key="y_select")
+    x_col = st.selectbox("Select X-axis column (numeric)", numeric_cols)
+    y_col = st.selectbox("Select Y-axis column (numeric)", numeric_cols)
 
     # ----------------------------
     # Coloring categories
     # ----------------------------
-    non_numeric_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
-    # Avoid including helper column in UI
-    non_numeric_cols = [c for c in non_numeric_cols if c != "_dt_filter_col"]
+    non_numeric_cols = [c for c in df.select_dtypes(exclude=[np.number]).columns if c != "_dt_filter_col"]
 
-    cat_cols = st.multiselect(
-        "Select categorical columns to color by",
-        non_numeric_cols,
-        key="cat_cols"
-    )
+    cat_cols = st.multiselect("Select categorical columns to color by", non_numeric_cols)
 
     if cat_cols:
         df["__combined_color__"] = df[cat_cols].astype(str).agg(" | ".join, axis=1)
@@ -196,9 +160,8 @@ if uploaded_file:
     # ----------------------------
     categories = df["__combined_color__"].unique().tolist()
     selected_categories = st.multiselect(
-        "Filter categories for regression (regression lines drawn only for selected categories)",
-        categories,
-        key="reg_filter"
+        "Filter categories for regression (lines drawn only for selected categories)",
+        categories
     )
 
     plot_df = df[df["__combined_color__"].isin(selected_categories)] if selected_categories else df
@@ -206,12 +169,33 @@ if uploaded_file:
     # ----------------------------
     # Plot
     # ----------------------------
-    fig = px.scatter(
-        plot_df, x=x_col, y=y_col, color="__combined_color__", opacity=0.7
-    )
-
+    fig = px.scatter(plot_df, x=x_col, y=y_col, color="__combined_color__", opacity=0.7)
     eq_texts = []
 
+    # 1. Always draw an "overall" regression line for the whole data:
+    if len(df) > 1:
+        X_all = df[[x_col]].values
+        y_all = df[y_col].values
+        model_all = LinearRegression().fit(X_all, y_all)
+        y_pred_all = model_all.predict(X_all)
+        slope_all = model_all.coef_[0]
+        intercept_all = model_all.intercept_
+        r2_all = r2_score(y_all, y_pred_all)
+
+        line_x_all = np.linspace(df[x_col].min(), df[x_col].max(), 100).reshape(-1, 1)
+        line_y_all = model_all.predict(line_x_all)
+
+        fig.add_trace(go.Scatter(
+            x=line_x_all.flatten(),
+            y=line_y_all,
+            mode="lines",
+            name=f"Regression (All Data)",
+            line=dict(dash="dot" , color = "black", width=3)  # dashed to differentiate
+        ))
+
+        eq_texts.append(f"**All Data:** y = {slope_all:.3f}x + {intercept_all:.3f} (R² = {r2_all:.3f})")
+
+    # 2. Draw individual regression lines for selected categories
     for category in (selected_categories or []):
         sub_df = df[df["__combined_color__"] == category]
         if len(sub_df) > 1:
@@ -242,7 +226,8 @@ if uploaded_file:
         for eq in eq_texts:
             st.markdown(eq)
     else:
-        st.info("Select one or more categories to draw regression line(s).")
+        st.info("No regression equations to display.")
 
 else:
     st.info("Upload a CSV or Excel file to begin.")
+
