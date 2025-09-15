@@ -245,7 +245,7 @@ if uploaded_file:
                 line=dict(color="red", width=2)  # choose any color here
             ))
 
-            eq_texts.append(f"**{category}:** y = {slope:.3f}x + {intercept:.3f} (R² = {r2:.3f})")
+            eq_texts.append(f"**{category}:** y = {slope:.5f}x + {intercept:.3f} (R² = {r2:.3f})")
 
     st.plotly_chart(fig, use_container_width=True)
 
@@ -258,5 +258,6 @@ if uploaded_file:
 
 else:
     st.info("Upload a CSV, XLSX, or XLSM file to begin.")
+
 
 
